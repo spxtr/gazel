@@ -475,7 +475,7 @@ func (v *Vendorer) reconcileAllRules() (int, error) {
 	sort.Strings(paths)
 	written := 0
 	for _, path := range paths {
-		w, err := ReconcileRules(path, v.newRules[path], v.managedAttrs, v.dryRun)
+		w, err := v.reconcileRules(path)
 		if w {
 			written++
 		}
@@ -604,7 +604,8 @@ func findBuildFile(pkgPath string) (bool, string) {
 	return false, filepath.Join(pkgPath, "BUILD")
 }
 
-func ReconcileRules(pkgPath string, rules []*bzl.Rule, managedAttrs []string, dryRun bool) (bool, error) {
+func (v *Vendorer) reconcileRules(pkgPath string) (bool, error) {
+	rules := v.newRules[pkgPath]
 	_, path := findBuildFile(pkgPath)
 	info, err := os.Stat(path)
 	if err != nil && os.IsNotExist(err) {
@@ -612,7 +613,7 @@ func ReconcileRules(pkgPath string, rules []*bzl.Rule, managedAttrs []string, dr
 		writeHeaders(f)
 		reconcileLoad(f, rules)
 		writeRules(f, rules)
-		return writeFile(path, f, false, dryRun)
+		return writeFile(path, f, false, v.dryRun)
 	} else if err != nil {
 		return false, err
 	}
@@ -647,7 +648,7 @@ func ReconcileRules(pkgPath string, rules []*bzl.Rule, managedAttrs []string, dr
 				o.DelAttr(name)
 			}
 		}
-		for _, attr := range managedAttrs {
+		for _, attr := range v.managedAttrs {
 			reconcileAttr(o, r, attr)
 		}
 		delete(oldRules, r.Name())
@@ -661,7 +662,7 @@ func ReconcileRules(pkgPath string, rules []*bzl.Rule, managedAttrs []string, dr
 	}
 	reconcileLoad(f, f.Rules(""))
 
-	return writeFile(path, f, true, dryRun)
+	return writeFile(path, f, true, v.dryRun)
 }
 
 func reconcileLoad(f *bzl.File, rules []*bzl.Rule) {
