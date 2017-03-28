@@ -23,6 +23,7 @@ import (
 const (
 	vendorPath     = "vendor/"
 	automanagedTag = "automanaged"
+	overrideSuffix = ".overload"
 )
 
 var (
@@ -475,8 +476,13 @@ func (v *Vendorer) reconcileAllRules() (int, error) {
 	sort.Strings(paths)
 	written := 0
 	for _, path := range paths {
-		w, err := v.reconcileRules(path)
+		w, err := v.reconcileOverload(path)
 		if w {
+			if v.dryRun {
+				fmt.Fprintf(os.Stderr, "DRY-RUN: wrote %q\n", path)
+			} else {
+				fmt.Fprintf(os.Stderr, "wrote %q\n", path)
+			}
 			written++
 		}
 		if err != nil {
@@ -591,42 +597,90 @@ func newRule(rt RuleType, namer NamerFunc, attrs map[string]bzl.Expr) *bzl.Rule 
 }
 
 // findBuildFile determines the name of a preexisting BUILD file, returning
-// a default if no such file exists.
-func findBuildFile(pkgPath string) (bool, string) {
+// a default if no such file exists. If a BUILD.override file exists, it is
+// returned in the last value.
+func findBuildFile(pkgPath string) (bool, string, string) {
 	options := []string{"BUILD.bazel", "BUILD"}
 	for _, b := range options {
 		path := filepath.Join(pkgPath, b)
-		info, err := os.Stat(path)
-		if err == nil && !info.IsDir() {
-			return true, path
+		oPath := path + overrideSuffix
+		if info, err := os.Stat(oPath); err == nil && !info.IsDir() {
+			return true, path, oPath
+		}
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return true, path, ""
 		}
 	}
-	return false, filepath.Join(pkgPath, "BUILD")
+	return false, filepath.Join(pkgPath, "BUILD"), ""
 }
 
-func (v *Vendorer) reconcileRules(pkgPath string) (bool, error) {
+func (v *Vendorer) reconcileOverload(pkgPath string) (bool, error) {
+	_, path, oPath := findBuildFile(pkgPath)
+	var f *bzl.File
+	var oBytes []byte
+	var oRules []*bzl.Rule
+	fmt.Println(path, oPath)
+	if v.cfg.MergeOverrides && oPath != "" {
+		var err error
+		oBytes, err = ioutil.ReadFile(oPath)
+		if err != nil {
+			return false, err
+		}
+		f, err = bzl.Parse(oPath, oBytes)
+		if err != nil {
+			return false, err
+		}
+		oRules = f.Rules("")
+	}
+	wrote, err := v.reconcileRules(pkgPath, path, oRules)
+	if !v.cfg.MergeOverrides {
+		return wrote, err
+	}
+	if oPath == "" {
+		return false, nil
+	}
+	var info bzl.RewriteInfo
+	bzl.Rewrite(f, &info)
+	out := bzl.Format(f)
+	if *printDiff {
+		Diff(oBytes, out)
+	}
+	wrote = bytes.Compare(out, oBytes) != 0
+	if v.dryRun || !wrote {
+		return wrote, nil
+	}
+	werr := ioutil.WriteFile(oPath, out, 0644)
+	return werr == nil, werr
+}
+
+func (v *Vendorer) reconcileRules(pkgPath, buildPath string, overloadRules []*bzl.Rule) (bool, error) {
 	rules := v.newRules[pkgPath]
-	_, path := findBuildFile(pkgPath)
-	info, err := os.Stat(path)
+	info, err := os.Stat(buildPath)
 	if err != nil && os.IsNotExist(err) {
 		f := &bzl.File{}
 		writeHeaders(f)
 		reconcileLoad(f, rules)
+		for _, r := range overloadRules {
+			f.Stmt = append(f.Stmt, r.Call)
+		}
 		writeRules(f, rules)
-		return writeFile(path, f, false, v.dryRun)
+		return writeFile(buildPath, f, false, v.dryRun)
 	} else if err != nil {
 		return false, err
 	}
 	if info.IsDir() {
-		return false, fmt.Errorf("%q cannot be a directory", path)
+		return false, fmt.Errorf("%q cannot be a directory", buildPath)
 	}
-	b, err := ioutil.ReadFile(path)
+	b, err := ioutil.ReadFile(buildPath)
 	if err != nil {
 		return false, err
 	}
-	f, err := bzl.Parse(path, b)
+	f, err := bzl.Parse(buildPath, b)
 	if err != nil {
 		return false, err
+	}
+	for _, r := range overloadRules {
+		f.Stmt = append(f.Stmt, r.Call)
 	}
 	oldRules := make(map[string]*bzl.Rule)
 	for _, r := range f.Rules("") {
@@ -662,7 +716,7 @@ func (v *Vendorer) reconcileRules(pkgPath string) (bool, error) {
 	}
 	reconcileLoad(f, f.Rules(""))
 
-	return writeFile(path, f, true, v.dryRun)
+	return writeFile(buildPath, f, true, v.dryRun)
 }
 
 func reconcileLoad(f *bzl.File, rules []*bzl.Rule) {
@@ -726,13 +780,9 @@ func writeFile(path string, f *bzl.File, exists, dryRun bool) (bool, error) {
 		}
 	}
 	if dryRun {
-		fmt.Fprintf(os.Stderr, "DRY-RUN: wrote %q\n", path)
 		return true, nil
 	}
 	werr := ioutil.WriteFile(path, out, 0644)
-	if werr == nil {
-		fmt.Fprintf(os.Stderr, "wrote %q\n", path)
-	}
 	return werr == nil, werr
 }
 

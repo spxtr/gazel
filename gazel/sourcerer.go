@@ -50,7 +50,7 @@ func (v *Vendorer) walkSource(pkgPath string) ([]string, error) {
 	_, hasRules := v.newRules[pkgPath]
 	isPkg := hasRules
 	if !isPkg {
-		isPkg, _ = findBuildFile(pkgPath)
+		isPkg, _, _ = findBuildFile(pkgPath)
 	}
 
 	if !isPkg {

@@ -18,6 +18,8 @@ type Cfg struct {
 	VendorMultipleBuildFiles bool
 	// whether to manage kubernetes' pkg/generated/openapi.
 	K8sOpenAPIGen bool
+	// whether to merge BUILD.override files.
+	MergeOverrides bool
 }
 
 func ReadCfg(cfgPath string) (*Cfg, error) {

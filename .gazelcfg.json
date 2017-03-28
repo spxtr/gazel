@@ -1,3 +1,4 @@
 {
-	"GoPrefix": "github.com/mikedanese/gazel"
+	"GoPrefix": "github.com/mikedanese/gazel",
+    "MergeOverrides": true
 }
